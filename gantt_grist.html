@@ -806,9 +806,18 @@ async function writeToGrist(task) {
   } catch(e) {
     showToast('⚠ ' + (e.message || 'Erreur écriture'), 'error');
     console.error('writeToGrist error:', e);
-  } finally {
-    showLoading(false);
+finally {
+  showLoading(false);
+
+  // 🔥 FORCER SYNC UI
+  try {
+    const records = await grist.docApi.fetchTable(gristTableName);
+    tasks = rowsToTasks(records);
+    applyFilter();
+  } catch(e) {
+    console.error("refresh error", e);
   }
+}
 }
 
 async function deleteFromGrist(task) {
