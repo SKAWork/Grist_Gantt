@@ -712,8 +712,12 @@ function initGrist() {
 grist.onRecords(function(data) {
   console.log("RAW DATA:", data);
 
+  // ✅ IMPORTANT : marquer connecté
+  gristReady = true;
+
   if (!data || !data.records) {
     tasks = [];
+    setStatus(true, 'Connecté — 0 tâche');
     applyFilter();
     return;
   }
@@ -729,6 +733,10 @@ grist.onRecords(function(data) {
   console.log("PARSED:", records);
 
   tasks = rowsToTasks(records);
+
+  // ✅ remettre le status
+  setStatus(true, 'Connecté — ' + tasks.length + ' tâche(s)');
+
   applyFilter();
 });
 
