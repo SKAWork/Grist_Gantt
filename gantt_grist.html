@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Gantt Grist</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap');
 
@@ -693,38 +694,33 @@ function initGrist() {
   // 1) Déclarer qu'on a besoin d'un accès complet
   grist.ready({ requiredAccess: 'full' });
 
-  // 2) onRecords : appelé automatiquement à chaque changement de la table liée
-  //    C'est le mécanisme officiel Grist pour la synchronisation table → vue
-  grist.onRecords(function(records) {
+  // 2) onRecords : callback officiel Grist, déclenché automatiquement
+  //    à chaque modification de la table liée → synchronisation table → vue
+  grist.onRecords(function(records, mappings) {
     if (!records || records.length === 0) {
       tasks = [];
     } else {
       tasks = rowsToTasks(records);
-    }
-    // Récupérer le nom de la table depuis le premier record si possible
-    if (!gristTableName) {
-      grist.selectedTable.getTableId().then(id => {
-        gristTableName = id;
-        updateTableInfo();
-      }).catch(() => {});
     }
     setStatus(true, 'Connecté — ' + tasks.length + ' tâche(s)');
     applyFilter();
     showLoading(false);
   });
 
-  // 3) Récupérer le nom de la table pour les écritures
-  if (grist.selectedTable && grist.selectedTable.getTableId) {
-    grist.selectedTable.getTableId().then(id => {
-      gristTableName = id;
-      updateTableInfo();
-    }).catch(() => {
-      // fallback : essayer via getTable (ancienne API)
-      if (grist.getTable) {
-        grist.getTable().then(id => { gristTableName = id; updateTableInfo(); }).catch(() => {});
+  // 3) Récupérer le nom de la table via l'API standard
+  grist.getTable().then(function(tableId) {
+    gristTableName = tableId;
+    updateTableInfo();
+  }).catch(function(e) {
+    console.warn('getTable error:', e);
+    // Fallback : on essaie de le lire depuis docApi
+    grist.docApi.listTables().then(function(tables) {
+      if (tables && tables.length > 0) {
+        gristTableName = tables[0];
+        updateTableInfo();
       }
-    });
-  }
+    }).catch(function() {});
+  });
 }
 
 function updateTableInfo() {
