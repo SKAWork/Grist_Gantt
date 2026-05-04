@@ -470,7 +470,7 @@
   <div class="header-logo">◈ Gantt</div>
   <div class="header-title">Diagramme de Gantt — Grist</div>
   <div class="grist-info" id="gristTableInfo">
-    <strong>Grist :</strong> En attente de connexion…
+    <strong>Colonnes :</strong> Nom · Debut · Fin · Responsable · Statut · Avancement · Couleur · Note
   </div>
   <div class="status-pill disconnected" id="connectionStatus">
     <div class="status-dot"></div>
@@ -639,14 +639,12 @@ let lastRowCount = 0;
 //  GRIST INTEGRATION
 // ═══════════════════════════════════════════════════════
 
-// Grist envoie les dates en secondes depuis epoch (timestamp Unix)
-// On convertit vers YYYY-MM-DD et inversement
+// Grist stocke les dates en secondes depuis epoch (timestamp Unix)
 function parseGristDate(val) {
   if (!val) return null;
   if (typeof val === 'number') {
-    // Timestamp Unix en secondes → Date locale
+    // Timestamp secondes → YYYY-MM-DD en heure locale
     const d = new Date(val * 1000);
-    // Correction décalage UTC pour éviter J-1
     const local = new Date(d.getTime() + d.getTimezoneOffset() * 60000);
     return local.toISOString().slice(0, 10);
   }
@@ -656,30 +654,43 @@ function parseGristDate(val) {
 
 function dateToGristTimestamp(dateStr) {
   if (!dateStr) return null;
-  // YYYY-MM-DD → timestamp Unix en secondes (midi UTC pour éviter décalages)
   const [y, m, d] = dateStr.split('-').map(Number);
-  return Date.UTC(y, m - 1, d) / 1000;
+  // Minuit heure locale → secondes Unix
+  return new Date(y, m - 1, d).getTime() / 1000;
+}
+
+// Convertit un tableau de records Grist en tâches locales
+// On accepte à la fois les noms de colonnes exacts ET les noms normalisés
+function findCol(rec, candidates) {
+  for (const c of candidates) {
+    if (rec[c] !== undefined) return rec[c];
+  }
+  return undefined;
 }
 
 function rowsToTasks(records) {
-  // records est un tableau d'objets {id, Nom, Debut, Fin, ...}
   const newTasks = [];
+  let colorIdx = 0;
   for (const rec of records) {
-    const start = parseGristDate(rec[COL_MAP.start]);
-    const end   = parseGristDate(rec[COL_MAP.end]);
-    if (!start || !end) continue; // on ignore les lignes sans dates
+    // Chercher chaque colonne avec plusieurs variantes possibles de noms
+    const name  = findCol(rec, ['Nom','nom','Name','name','Tache','Tâche','tache']) || '';
+    const start = parseGristDate(findCol(rec, ['Debut','debut','Début','début','Start','start','DateDebut']));
+    const end   = parseGristDate(findCol(rec, ['Fin','fin','End','end','DateFin']));
+    if (!start || !end) continue;
+    const color = findCol(rec, ['Couleur','couleur','Color','color']) || COLORS[colorIdx % COLORS.length];
     newTasks.push({
       id:          'g' + rec.id,
       gristId:     rec.id,
-      name:        rec[COL_MAP.name]        || '(sans nom)',
+      name:        name || '(sans nom)',
       start,
       end,
-      responsible: rec[COL_MAP.responsible] || '',
-      status:      rec[COL_MAP.status]      || 'En cours',
-      progress:    parseInt(rec[COL_MAP.progress]) || 0,
-      color:       rec[COL_MAP.color]       || COLORS[rec.id % COLORS.length],
-      note:        rec[COL_MAP.note]        || ''
+      responsible: String(findCol(rec, ['Responsable','responsable','Responsible','responsible']) || ''),
+      status:      String(findCol(rec, ['Statut','statut','Status','status']) || 'En cours'),
+      progress:    parseInt(findCol(rec, ['Avancement','avancement','Progress','progress'])) || 0,
+      color,
+      note:        String(findCol(rec, ['Note','note','Notes','notes','Description']) || '')
     });
+    colorIdx++;
   }
   return newTasks;
 }
@@ -691,12 +702,15 @@ function initGrist() {
     return;
   }
 
-  // 1) Déclarer qu'on a besoin d'un accès complet
+  // Accès complet nécessaire pour lire ET écrire
+  // L'utilisateur doit accepter dans le panneau Grist
   grist.ready({ requiredAccess: 'full' });
 
-  // 2) onRecords : callback officiel Grist, déclenché automatiquement
-  //    à chaque modification de la table liée → synchronisation table → vue
-  grist.onRecords(function(records, mappings) {
+  // onRecords = callback officiel Grist
+  // Déclenché automatiquement à chaque modification de la table liée
+  // C'est le seul moyen fiable de synchroniser table → vue
+  grist.onRecords(function(records) {
+    gristReady = true;
     if (!records || records.length === 0) {
       tasks = [];
     } else {
@@ -704,33 +718,63 @@ function initGrist() {
     }
     setStatus(true, 'Connecté — ' + tasks.length + ' tâche(s)');
     applyFilter();
-    showLoading(false);
   });
 
-  // 3) Récupérer le nom de la table via l'API standard
-  grist.getTable().then(function(tableId) {
-    gristTableName = tableId;
-    updateTableInfo();
-  }).catch(function(e) {
-    console.warn('getTable error:', e);
-    // Fallback : on essaie de le lire depuis docApi
-    grist.docApi.listTables().then(function(tables) {
-      if (tables && tables.length > 0) {
-        gristTableName = tables[0];
+  // Récupérer le nom de la table (nécessaire pour les écritures)
+  // Plusieurs méthodes selon la version de Grist
+  tryGetTableName();
+}
+
+function tryGetTableName() {
+  // Méthode 1 : API moderne
+  if (grist.selectedTable && typeof grist.selectedTable.getTableId === 'function') {
+    grist.selectedTable.getTableId().then(id => {
+      gristTableName = id;
+      updateTableInfo();
+    }).catch(() => tryGetTableNameV2());
+  } else {
+    tryGetTableNameV2();
+  }
+}
+
+function tryGetTableNameV2() {
+  // Méthode 2 : ancienne API
+  if (typeof grist.getTable === 'function') {
+    grist.getTable().then(id => {
+      gristTableName = id;
+      updateTableInfo();
+    }).catch(() => tryGetTableNameV3());
+  } else {
+    tryGetTableNameV3();
+  }
+}
+
+function tryGetTableNameV3() {
+  // Méthode 3 : via docApi
+  if (grist.docApi && typeof grist.docApi.fetchTable === 'function') {
+    // On ne connaît pas le nom, on va l'injecter via le widget options
+    grist.widgetApi && grist.widgetApi.getOptions().then(opts => {
+      if (opts && opts.tableId) {
+        gristTableName = opts.tableId;
         updateTableInfo();
       }
-    }).catch(function() {});
-  });
+    }).catch(() => {});
+  }
 }
 
 function updateTableInfo() {
   document.getElementById('gristTableInfo').innerHTML =
-    `<strong>Table :</strong> ${gristTableName} — Colonnes : <em>Nom, Debut, Fin, Responsable, Statut, Avancement, Couleur, Note</em>`;
+    `<strong>Table :</strong> ${gristTableName || '(auto)'} · <em>Nom · Debut · Fin · Responsable · Statut · Avancement · Couleur · Note</em>`;
 }
 
 async function writeToGrist(task) {
-  if (typeof grist === 'undefined' || !gristTableName) {
+  if (typeof grist === 'undefined') {
     showToast('⚠ Grist non connecté', 'error');
+    return;
+  }
+  if (!gristTableName) {
+    showToast('⚠ Nom de table inconnu — réessayez', 'error');
+    tryGetTableName();
     return;
   }
   try {
@@ -753,7 +797,6 @@ async function writeToGrist(task) {
       const result = await grist.docApi.applyUserActions([
         ['AddRecord', gristTableName, null, record]
       ]);
-      // result.rowIds[0] = l'id Grist de la nouvelle ligne
       if (result && result.rowIds && result.rowIds[0]) {
         task.gristId = result.rowIds[0];
         task.id = 'g' + task.gristId;
@@ -761,7 +804,7 @@ async function writeToGrist(task) {
     }
     showToast('✓ Enregistré dans Grist', 'success');
   } catch(e) {
-    showToast('⚠ Erreur écriture : ' + e.message, 'error');
+    showToast('⚠ ' + (e.message || 'Erreur écriture'), 'error');
     console.error('writeToGrist error:', e);
   } finally {
     showLoading(false);
