@@ -637,97 +637,117 @@ let lastRowCount = 0;
 // ═══════════════════════════════════════════════════════
 //  GRIST INTEGRATION
 // ═══════════════════════════════════════════════════════
+
+// Grist envoie les dates en secondes depuis epoch (timestamp Unix)
+// On convertit vers YYYY-MM-DD et inversement
+function parseGristDate(val) {
+  if (!val) return null;
+  if (typeof val === 'number') {
+    // Timestamp Unix en secondes → Date locale
+    const d = new Date(val * 1000);
+    // Correction décalage UTC pour éviter J-1
+    const local = new Date(d.getTime() + d.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 10);
+  }
+  if (typeof val === 'string' && val.length >= 10) return val.slice(0, 10);
+  return null;
+}
+
+function dateToGristTimestamp(dateStr) {
+  if (!dateStr) return null;
+  // YYYY-MM-DD → timestamp Unix en secondes (midi UTC pour éviter décalages)
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return Date.UTC(y, m - 1, d) / 1000;
+}
+
+function rowsToTasks(records) {
+  // records est un tableau d'objets {id, Nom, Debut, Fin, ...}
+  const newTasks = [];
+  for (const rec of records) {
+    const start = parseGristDate(rec[COL_MAP.start]);
+    const end   = parseGristDate(rec[COL_MAP.end]);
+    if (!start || !end) continue; // on ignore les lignes sans dates
+    newTasks.push({
+      id:          'g' + rec.id,
+      gristId:     rec.id,
+      name:        rec[COL_MAP.name]        || '(sans nom)',
+      start,
+      end,
+      responsible: rec[COL_MAP.responsible] || '',
+      status:      rec[COL_MAP.status]      || 'En cours',
+      progress:    parseInt(rec[COL_MAP.progress]) || 0,
+      color:       rec[COL_MAP.color]       || COLORS[rec.id % COLORS.length],
+      note:        rec[COL_MAP.note]        || ''
+    });
+  }
+  return newTasks;
+}
+
 function initGrist() {
   if (typeof grist === 'undefined') {
     setStatus(false, 'Mode démo (hors Grist)');
     loadDemoData();
     return;
   }
+
+  // 1) Déclarer qu'on a besoin d'un accès complet
   grist.ready({ requiredAccess: 'full' });
-  grist.onRecord(record => {}); // keep alive
-  grist.on('message', handleGristMessage);
 
-  grist.getTable().then(tableRef => {
-    gristTableName = tableRef;
-    document.getElementById('gristTableInfo').innerHTML =
-      `<strong>Table :</strong> ${tableRef} — Colonnes requises : <em>Nom, Debut, Fin, Responsable, Statut, Avancement, Couleur, Note</em>`;
-    setStatus(true, 'Connecté à Grist');
-    fetchAllRows();
-    // Poll for external changes every 3 seconds
-    syncInterval = setInterval(fetchAllRows, 3000);
-  }).catch(() => {
-    setStatus(false, 'Erreur lecture table');
-  });
-}
-
-function handleGristMessage(msg) {
-  if (msg.tableId) {
-    fetchAllRows();
-  }
-}
-
-async function fetchAllRows() {
-  if (!gristReady && typeof grist === 'undefined') return;
-  if (typeof grist === 'undefined') return;
-  try {
-    showLoading(true);
-    const rows = await grist.docApi.fetchTable(gristTableName);
-    if (!rows) return;
-    const ids = rows.id || [];
-    const newTasks = [];
-    for (let i = 0; i < ids.length; i++) {
-      const t = {
-        id: 'g' + ids[i],
-        gristId: ids[i],
-        name: getCol(rows, COL_MAP.name, i) || '(sans nom)',
-        start: parseGristDate(getCol(rows, COL_MAP.start, i)),
-        end: parseGristDate(getCol(rows, COL_MAP.end, i)),
-        responsible: getCol(rows, COL_MAP.responsible, i) || '',
-        status: getCol(rows, COL_MAP.status, i) || 'En cours',
-        progress: parseInt(getCol(rows, COL_MAP.progress, i)) || 0,
-        color: getCol(rows, COL_MAP.color, i) || COLORS[i % COLORS.length],
-        note: getCol(rows, COL_MAP.note, i) || ''
-      };
-      if (t.start && t.end) newTasks.push(t);
+  // 2) onRecords : appelé automatiquement à chaque changement de la table liée
+  //    C'est le mécanisme officiel Grist pour la synchronisation table → vue
+  grist.onRecords(function(records) {
+    if (!records || records.length === 0) {
+      tasks = [];
+    } else {
+      tasks = rowsToTasks(records);
     }
-    tasks = newTasks;
+    // Récupérer le nom de la table depuis le premier record si possible
+    if (!gristTableName) {
+      grist.selectedTable.getTableId().then(id => {
+        gristTableName = id;
+        updateTableInfo();
+      }).catch(() => {});
+    }
+    setStatus(true, 'Connecté — ' + tasks.length + ' tâche(s)');
     applyFilter();
-    showToast('✓ Données synchronisées', 'success');
-  } catch(e) {
-    console.warn('Grist fetch error:', e);
-  } finally {
     showLoading(false);
+  });
+
+  // 3) Récupérer le nom de la table pour les écritures
+  if (grist.selectedTable && grist.selectedTable.getTableId) {
+    grist.selectedTable.getTableId().then(id => {
+      gristTableName = id;
+      updateTableInfo();
+    }).catch(() => {
+      // fallback : essayer via getTable (ancienne API)
+      if (grist.getTable) {
+        grist.getTable().then(id => { gristTableName = id; updateTableInfo(); }).catch(() => {});
+      }
+    });
   }
 }
 
-function getCol(rows, col, i) {
-  return rows[col] ? rows[col][i] : undefined;
-}
-
-function parseGristDate(val) {
-  if (!val) return null;
-  // Grist stores dates as seconds since epoch OR as YYYY-MM-DD string
-  if (typeof val === 'number') {
-    const d = new Date(val * 1000);
-    return d.toISOString().slice(0, 10);
-  }
-  if (typeof val === 'string') return val.slice(0, 10);
-  return null;
+function updateTableInfo() {
+  document.getElementById('gristTableInfo').innerHTML =
+    `<strong>Table :</strong> ${gristTableName} — Colonnes : <em>Nom, Debut, Fin, Responsable, Statut, Avancement, Couleur, Note</em>`;
 }
 
 async function writeToGrist(task) {
-  if (typeof grist === 'undefined') return;
+  if (typeof grist === 'undefined' || !gristTableName) {
+    showToast('⚠ Grist non connecté', 'error');
+    return;
+  }
   try {
     showLoading(true);
     const record = {
-      [COL_MAP.name]: task.name,
-      [COL_MAP.start]: task.start,
-      [COL_MAP.end]: task.end,
+      [COL_MAP.name]:        task.name,
+      [COL_MAP.start]:       dateToGristTimestamp(task.start),
+      [COL_MAP.end]:         dateToGristTimestamp(task.end),
       [COL_MAP.responsible]: task.responsible,
-      [COL_MAP.status]: task.status,
-      [COL_MAP.progress]: task.progress,
-      [COL_MAP.color]: task.color,
-      [COL_MAP.note]: task.note
+      [COL_MAP.status]:      task.status,
+      [COL_MAP.progress]:    task.progress,
+      [COL_MAP.color]:       task.color,
+      [COL_MAP.note]:        task.note
     };
     if (task.gristId) {
       await grist.docApi.applyUserActions([
@@ -737,37 +757,40 @@ async function writeToGrist(task) {
       const result = await grist.docApi.applyUserActions([
         ['AddRecord', gristTableName, null, record]
       ]);
-      if (result && result.rowIds) task.gristId = result.rowIds[0];
-      task.id = 'g' + task.gristId;
+      // result.rowIds[0] = l'id Grist de la nouvelle ligne
+      if (result && result.rowIds && result.rowIds[0]) {
+        task.gristId = result.rowIds[0];
+        task.id = 'g' + task.gristId;
+      }
     }
     showToast('✓ Enregistré dans Grist', 'success');
   } catch(e) {
-    showToast('⚠ Erreur écriture Grist', 'error');
-    console.error(e);
+    showToast('⚠ Erreur écriture : ' + e.message, 'error');
+    console.error('writeToGrist error:', e);
   } finally {
     showLoading(false);
   }
 }
 
 async function deleteFromGrist(task) {
-  if (typeof grist === 'undefined' || !task.gristId) return;
+  if (typeof grist === 'undefined' || !task.gristId || !gristTableName) return;
   try {
     await grist.docApi.applyUserActions([
       ['RemoveRecord', gristTableName, task.gristId]
     ]);
-  } catch(e) { console.error(e); }
+  } catch(e) { console.error('deleteFromGrist error:', e); }
 }
 
 function setStatus(ok, msg) {
   gristReady = ok;
   const pill = document.getElementById('connectionStatus');
-  const txt = document.getElementById('statusText');
+  const txt  = document.getElementById('statusText');
   pill.className = 'status-pill ' + (ok ? 'connected' : 'disconnected');
   txt.textContent = msg;
 }
 
 // ═══════════════════════════════════════════════════════
-//  DEMO DATA (hors Grist)
+//  DEMO DATA (hors Grist uniquement)
 // ═══════════════════════════════════════════════════════
 function loadDemoData() {
   const today = new Date();
@@ -777,11 +800,11 @@ function loadDemoData() {
     return x.toISOString().slice(0, 10);
   };
   tasks = [
-    { id: 'd1', name: 'Cadrage projet', start: d(-20), end: d(-10), responsible: 'Alice', status: 'Terminé', progress: 100, color: '#38d9a9', note: '' },
-    { id: 'd2', name: 'Conception UI', start: d(-12), end: d(2), responsible: 'Bob', status: 'En cours', progress: 70, color: '#4f8fff', note: 'Maquettes Figma' },
-    { id: 'd3', name: 'Développement API', start: d(-5), end: d(15), responsible: 'Claire', status: 'En cours', progress: 40, color: '#da77f2', note: '' },
-    { id: 'd4', name: 'Tests & QA', start: d(10), end: d(25), responsible: 'David', status: 'En attente', progress: 0, color: '#ffd43b', note: '' },
-    { id: 'd5', name: 'Déploiement', start: d(22), end: d(30), responsible: 'Alice', status: 'En attente', progress: 0, color: '#ff6b6b', note: 'Production' },
+    { id: 'd1', name: 'Cadrage projet',     start: d(-20), end: d(-10), responsible: 'Alice',  status: 'Terminé',    progress: 100, color: '#38d9a9', note: '' },
+    { id: 'd2', name: 'Conception UI',      start: d(-12), end: d(2),   responsible: 'Bob',    status: 'En cours',   progress: 70,  color: '#4f8fff', note: 'Maquettes Figma' },
+    { id: 'd3', name: 'Développement API',  start: d(-5),  end: d(15),  responsible: 'Claire', status: 'En cours',   progress: 40,  color: '#da77f2', note: '' },
+    { id: 'd4', name: 'Tests & QA',         start: d(10),  end: d(25),  responsible: 'David',  status: 'En attente', progress: 0,   color: '#ffd43b', note: '' },
+    { id: 'd5', name: 'Déploiement',        start: d(22),  end: d(30),  responsible: 'Alice',  status: 'En attente', progress: 0,   color: '#ff6b6b', note: 'Production' },
   ];
   applyFilter();
 }
