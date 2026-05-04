@@ -709,16 +709,28 @@ function initGrist() {
   // onRecords = callback officiel Grist
   // Déclenché automatiquement à chaque modification de la table liée
   // C'est le seul moyen fiable de synchroniser table → vue
-  grist.onRecords(function(records) {
-    gristReady = true;
-    if (!records || records.length === 0) {
-      tasks = [];
-    } else {
-      tasks = rowsToTasks(records);
-    }
-    setStatus(true, 'Connecté — ' + tasks.length + ' tâche(s)');
+grist.onRecords(function(data) {
+  console.log("RAW DATA:", data);
+
+  if (!data || !data.records) {
+    tasks = [];
     applyFilter();
+    return;
+  }
+
+  const records = data.records.map(r => {
+    const obj = { id: r.id };
+    for (const col in data.columns) {
+      obj[col] = data.columns[col][r.id];
+    }
+    return obj;
   });
+
+  console.log("PARSED:", records);
+
+  tasks = rowsToTasks(records);
+  applyFilter();
+});
 
   // Récupérer le nom de la table (nécessaire pour les écritures)
   // Plusieurs méthodes selon la version de Grist
