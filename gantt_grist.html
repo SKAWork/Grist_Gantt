@@ -1,68 +1,1053 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-  <meta charset="utf-8">
-  <title>Gantt Chart Grist</title>
-  <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Gantt – Grist Custom View</title>
   <style>
-    body { font-family: sans-serif; margin: 0; padding: 10px; overflow: hidden; }
-    #mermaid-container { width: 100%; height: 100vh; cursor: pointer; }
-    .error { color: red; font-size: 12px; }
+    @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700&display=swap');
+
+    :root {
+      --bg: #0f1117;
+      --surface: #181c27;
+      --border: #252a38;
+      --accent: #4f8ef7;
+      --accent2: #7c3aed;
+      --text: #e8eaf0;
+      --muted: #5a6080;
+      --today: #f59e0b;
+      --bar-h: 28px;
+      --row-h: 52px;
+      --header-h: 80px;
+      --label-w: 220px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Syne', sans-serif;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Top bar ── */
+    #topbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    #topbar h1 {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      color: var(--accent);
+      flex: 1;
+    }
+    .nav-btn {
+      background: var(--border);
+      border: 1px solid #2e3448;
+      color: var(--text);
+      padding: 5px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      transition: background .15s;
+    }
+    .nav-btn:hover { background: #2a3050; }
+    #range-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      color: var(--muted);
+      min-width: 160px;
+      text-align: center;
+    }
+    #zoom-group { display: flex; gap: 4px; }
+    .zoom-btn {
+      background: var(--border);
+      border: 1px solid #2e3448;
+      color: var(--muted);
+      width: 28px; height: 28px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 16px;
+      display: flex; align-items: center; justify-content: center;
+      transition: background .15s;
+    }
+    .zoom-btn:hover { background: #2a3050; color: var(--text); }
+
+    /* ── Main area ── */
+    #main {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── Label column ── */
+    #labels {
+      width: var(--label-w);
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--border);
+      overflow: hidden;
+    }
+    #labels-header {
+      height: var(--header-h);
+      display: flex;
+      align-items: flex-end;
+      padding: 0 14px 10px;
+      font-size: 10px;
+      letter-spacing: .1em;
+      color: var(--muted);
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    #labels-body {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+    #labels-body::-webkit-scrollbar { width: 4px; }
+    #labels-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+    .label-row {
+      height: var(--row-h);
+      display: flex;
+      align-items: center;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background .12s;
+      gap: 8px;
+    }
+    .label-row:hover { background: rgba(79,142,247,.07); }
+    .label-row.selected { background: rgba(79,142,247,.13); }
+    .label-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .label-text {
+      font-size: 13px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .label-dates {
+      font-family: 'DM Mono', monospace;
+      font-size: 9px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    /* ── Chart area ── */
+    #chart-wrap {
+      flex: 1;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+    #chart-scroll {
+      flex: 1;
+      overflow: auto;
+      position: relative;
+    }
+    #chart-scroll::-webkit-scrollbar { height: 4px; }
+    #chart-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+    #chart-inner {
+      position: relative;
+      min-height: 100%;
+    }
+
+    /* ── Date header ── */
+    #date-header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      height: var(--header-h);
+      display: flex;
+      flex-direction: column;
+    }
+    #months-row {
+      height: 36px;
+      display: flex;
+      border-bottom: 1px solid var(--border);
+      overflow: hidden;
+    }
+    .month-cell {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      padding-left: 8px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      color: var(--accent);
+      border-right: 1px solid var(--border);
+      text-transform: uppercase;
+      overflow: hidden;
+    }
+    #days-row {
+      height: 44px;
+      display: flex;
+      overflow: hidden;
+    }
+    .day-cell {
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: 'DM Mono', monospace;
+      border-right: 1px solid var(--border);
+      cursor: pointer;
+      transition: background .1s;
+    }
+    .day-cell:hover { background: rgba(79,142,247,.08); }
+    .day-num { font-size: 11px; font-weight: 500; }
+    .day-name { font-size: 9px; color: var(--muted); margin-top: 2px; }
+    .day-cell.today { background: rgba(245,158,11,.08); }
+    .day-cell.today .day-num { color: var(--today); }
+    .day-cell.weekend .day-num { color: var(--muted); }
+
+    /* ── Grid rows ── */
+    #rows-container {
+      position: relative;
+    }
+    .grid-row {
+      height: var(--row-h);
+      position: relative;
+      border-bottom: 1px solid var(--border);
+      transition: background .12s;
+    }
+    .grid-row:hover { background: rgba(79,142,247,.04); }
+    .grid-row.selected { background: rgba(79,142,247,.08); }
+
+    /* vertical gridlines */
+    .v-line {
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 1px;
+      background: var(--border);
+      pointer-events: none;
+    }
+    .v-line.weekend { background: rgba(255,255,255,.03); }
+
+    /* ── Today line ── */
+    #today-line {
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 2px;
+      background: var(--today);
+      opacity: .7;
+      pointer-events: none;
+      z-index: 5;
+    }
+    #today-line::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -4px;
+      width: 10px; height: 10px;
+      background: var(--today);
+      border-radius: 50%;
+    }
+
+    /* ── Gantt bars ── */
+    .gantt-bar {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      height: var(--bar-h);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      padding: 0 8px;
+      cursor: pointer;
+      overflow: hidden;
+      transition: filter .15s, box-shadow .15s;
+      z-index: 2;
+      min-width: 4px;
+    }
+    .gantt-bar::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: rgba(255,255,255,.08);
+      border-radius: inherit;
+    }
+    .gantt-bar:hover {
+      filter: brightness(1.15);
+      box-shadow: 0 4px 20px rgba(0,0,0,.4);
+      z-index: 3;
+    }
+    .gantt-bar.selected {
+      box-shadow: 0 0 0 2px #fff, 0 4px 20px rgba(0,0,0,.5);
+      z-index: 4;
+    }
+    .bar-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      position: relative;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    /* drag handles */
+    .drag-handle {
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 8px;
+      cursor: col-resize;
+      z-index: 2;
+    }
+    .drag-handle.left { left: 0; border-radius: 6px 0 0 6px; }
+    .drag-handle.right { right: 0; border-radius: 0 6px 6px 0; }
+    .drag-handle:hover { background: rgba(255,255,255,.2); }
+
+    /* ── Empty state ── */
+    #empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 200px;
+      gap: 8px;
+      color: var(--muted);
+    }
+    #empty svg { opacity: .3; }
+    #empty p { font-size: 13px; }
+
+    /* ── Tooltip ── */
+    #tooltip {
+      position: fixed;
+      background: #1e2335;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 12px;
+      pointer-events: none;
+      z-index: 100;
+      display: none;
+      box-shadow: 0 8px 32px rgba(0,0,0,.5);
+      max-width: 220px;
+    }
+    #tooltip .tt-name { font-weight: 700; font-size: 13px; margin-bottom: 4px; }
+    #tooltip .tt-row { font-family: 'DM Mono', monospace; color: var(--muted); font-size: 11px; margin-top: 2px; }
+    #tooltip .tt-dur { color: var(--accent); font-weight: 600; margin-top: 4px; }
+
+    /* ── Config overlay ── */
+    #config-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.6);
+      z-index: 50;
+      align-items: center;
+      justify-content: center;
+    }
+    #config-overlay.show { display: flex; }
+    #config-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      width: 320px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.6);
+    }
+    #config-box h2 { font-size: 16px; margin-bottom: 4px; }
+    #config-box p { font-size: 12px; color: var(--muted); margin-bottom: 20px; }
+    .cfg-label { font-size: 11px; color: var(--muted); margin-bottom: 4px; display: block; }
+    .cfg-input {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      color: var(--text);
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      margin-bottom: 14px;
+      outline: none;
+    }
+    .cfg-input:focus { border-color: var(--accent); }
+    .cfg-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 16px;
+      font-family: 'Syne', sans-serif;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .btn-secondary {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 16px;
+      font-family: 'Syne', sans-serif;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    /* scrollbar sync hack */
+    #labels-body { scrollbar-width: none; }
+    #labels-body::-webkit-scrollbar { display: none; }
   </style>
 </head>
 <body>
-  <div id="mermaid-container">Chargement du Gantt...</div>
 
-  <script>
-    mermaid.initialize({ startOnLoad: false, securityLevel: 'loose', gantt: { useWidth: 1000 } });
+<!-- Top bar -->
+<div id="topbar">
+  <h1>📊 Gantt</h1>
+  <button class="nav-btn" id="btn-prev">◀ Préc.</button>
+  <span id="range-label">—</span>
+  <button class="nav-btn" id="btn-next">Suiv. ▶</button>
+  <div id="zoom-group">
+    <button class="zoom-btn" id="btn-zoom-out" title="Zoom arrière">−</button>
+    <button class="zoom-btn" id="btn-zoom-in" title="Zoom avant">+</button>
+  </div>
+  <button class="nav-btn" id="btn-today">Aujourd'hui</button>
+  <button class="nav-btn" id="btn-config">⚙ Colonnes</button>
+</div>
 
-    // Configuration des colonnes
-    const COL_NOM = "nom";
-    const COL_DEBUT = "debut";
-    const COL_FIN = "fin";
+<!-- Main -->
+<div id="main">
+  <!-- Labels -->
+  <div id="labels">
+    <div id="labels-header">Tâche</div>
+    <div id="labels-body" id="labels-scroll"></div>
+  </div>
 
-    function renderGantt(records) {
-      const container = document.getElementById('mermaid-container');
-      
-      if (!records || records.length === 0) {
-        container.innerHTML = "Aucune donnée disponible.";
-        return;
-      }
+  <!-- Chart -->
+  <div id="chart-wrap">
+    <div id="chart-scroll">
+      <div id="chart-inner">
+        <div id="date-header">
+          <div id="months-row"></div>
+          <div id="days-row"></div>
+        </div>
+        <div id="rows-container">
+          <div id="empty" style="display:none">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            <p>Aucune tâche avec des dates valides</p>
+          </div>
+        </div>
+        <div id="today-line" style="display:none"></div>
+      </div>
+    </div>
+  </div>
+</div>
 
-      let chartDefinition = "gantt\n  dateFormat  YYYY-MM-DD\n  axisFormat %d-%m\n  title Planning Projet\n  section Tâches\n";
+<!-- Tooltip -->
+<div id="tooltip">
+  <div class="tt-name" id="tt-name"></div>
+  <div class="tt-row" id="tt-start"></div>
+  <div class="tt-row" id="tt-end"></div>
+  <div class="tt-dur" id="tt-dur"></div>
+</div>
 
-      records.forEach(r => {
-        if (r[COL_NOM] && r[COL_DEBUT] && r[COL_FIN]) {
-          const start = new Date(r[COL_DEBUT]).toISOString().split('T')[0];
-          const end = new Date(r[COL_FIN]).toISOString().split('T')[0];
-          chartDefinition += `  ${r[COL_NOM]} :active, ${r.id}, ${start}, ${end}\n`;
-        }
-      });
+<!-- Config overlay -->
+<div id="config-overlay">
+  <div id="config-box">
+    <h2>⚙ Mapping des colonnes</h2>
+    <p>Entrez les noms exacts des colonnes Grist (sensible à la casse).</p>
+    <label class="cfg-label">Colonne Nom de la tâche</label>
+    <input class="cfg-input" id="cfg-nom" type="text" placeholder="Nom" />
+    <label class="cfg-label">Colonne Date de début</label>
+    <input class="cfg-input" id="cfg-debut" type="text" placeholder="Debut" />
+    <label class="cfg-label">Colonne Date de fin</label>
+    <input class="cfg-input" id="cfg-fin" type="text" placeholder="Fin" />
+    <div class="cfg-actions">
+      <button class="btn-secondary" id="cfg-cancel">Annuler</button>
+      <button class="btn-primary" id="cfg-save">Enregistrer</button>
+    </div>
+  </div>
+</div>
 
-      container.innerHTML = `<div class="mermaid">${chartDefinition}</div>`;
-      mermaid.init(undefined, document.querySelectorAll('.mermaid'));
+<script>
+// ─────────────────────────────────────────────
+//  Config & State
+// ─────────────────────────────────────────────
+const STORAGE_KEY = 'gantt_col_config';
+
+let colConfig = { nom: 'Nom', debut: 'Debut', fin: 'Fin' };
+try {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved) colConfig = { ...colConfig, ...JSON.parse(saved) };
+} catch {}
+
+let tasks = [];          // { id, rowIndex, nom, debut:Date, fin:Date }
+let selectedId = null;
+let dayWidth = 36;       // px per day
+let viewStart = null;    // Date (start of visible range)
+let viewDays = 60;       // nb of days visible
+let isDragging = false;
+let dragInfo = null;
+
+// Colors palette
+const COLORS = [
+  '#4f8ef7','#7c3aed','#059669','#dc2626','#d97706',
+  '#0891b2','#be185d','#65a30d','#7c2d12','#1d4ed8'
+];
+function taskColor(idx) { return COLORS[idx % COLORS.length]; }
+
+// ─────────────────────────────────────────────
+//  Date helpers
+// ─────────────────────────────────────────────
+function startOfDay(d) {
+  const c = new Date(d); c.setHours(0,0,0,0); return c;
+}
+function addDays(d, n) {
+  const c = new Date(d); c.setDate(c.getDate() + n); return c;
+}
+function diffDays(a, b) {
+  return Math.round((b - a) / 86400000);
+}
+function fmtDate(d) {
+  if (!d) return '—';
+  return d.toLocaleDateString('fr-FR', { day:'2-digit', month:'short', year:'numeric' });
+}
+function fmtShort(d) {
+  return d.toLocaleDateString('fr-FR', { day:'2-digit', month:'short' });
+}
+const DAY_NAMES = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
+const MONTH_NAMES = ['Jan','Fév','Mar','Avr','Mai','Jun','Jul','Aoû','Sep','Oct','Nov','Déc'];
+
+function parseGristDate(val) {
+  if (!val) return null;
+  // Grist dates are often Unix timestamps (seconds) or ISO strings
+  if (typeof val === 'number') {
+    // seconds since epoch
+    const d = new Date(val * 1000);
+    if (!isNaN(d)) return startOfDay(d);
+    return null;
+  }
+  if (typeof val === 'string') {
+    const d = new Date(val);
+    if (!isNaN(d)) return startOfDay(d);
+    return null;
+  }
+  return null;
+}
+
+// ─────────────────────────────────────────────
+//  Grist API
+// ─────────────────────────────────────────────
+function gristReady() {
+  return typeof grist !== 'undefined';
+}
+
+function initGrist() {
+  if (!gristReady()) {
+    console.warn('Grist API non disponible – mode démo');
+    loadDemoData();
+    return;
+  }
+
+  // Declare required columns
+  grist.ready({
+    requiredAccess: 'full',
+    columns: [
+      { name: colConfig.nom,   type: 'Text',    title: 'Nom de la tâche' },
+      { name: colConfig.debut, type: 'Date',    title: 'Date de début' },
+      { name: colConfig.fin,   type: 'Date',    title: 'Date de fin' },
+    ]
+  });
+
+  // Listen for data updates
+  grist.onRecords(handleGristRecords);
+
+  // Listen for cursor (selection) changes from table
+  grist.onRecord(handleGristCursor);
+}
+
+function handleGristRecords(records, mappings) {
+  tasks = records
+    .map((r, i) => {
+      // mappings handles column aliasing via grist.ready columns config
+      const nom   = r[colConfig.nom]   ?? r.Nom   ?? r.nom   ?? '(sans nom)';
+      const debut = parseGristDate(r[colConfig.debut] ?? r.Debut ?? r.debut);
+      const fin   = parseGristDate(r[colConfig.fin]   ?? r.Fin   ?? r.fin);
+      return { id: r.id, rowIndex: i, nom, debut, fin };
+    })
+    .filter(t => t.debut && t.fin && t.fin >= t.debut);
+
+  autoSetViewRange();
+  render();
+}
+
+function handleGristCursor(record) {
+  if (!record) return;
+  const found = tasks.find(t => t.id === record.id);
+  if (found) {
+    selectedId = found.id;
+    renderLabels();
+    renderBars();
+    // scroll to bar
+    scrollToTask(found);
+  }
+}
+
+async function updateGristRow(id, debut, fin) {
+  if (!gristReady()) return;
+  const updates = {};
+  updates[colConfig.debut] = Math.floor(debut.getTime() / 1000);
+  updates[colConfig.fin]   = Math.floor(fin.getTime() / 1000);
+  try {
+    await grist.setRecord(id, updates);
+  } catch(e) {
+    console.error('Erreur Grist setRecord:', e);
+  }
+}
+
+function selectGristRow(id) {
+  if (!gristReady()) return;
+  try { grist.setCursorPos({ rowId: id }); } catch {}
+}
+
+// ─────────────────────────────────────────────
+//  Demo data (when no Grist)
+// ─────────────────────────────────────────────
+function loadDemoData() {
+  const today = startOfDay(new Date());
+  tasks = [
+    { id:1, rowIndex:0, nom:'Conception UX', debut: addDays(today,-20), fin: addDays(today,-10) },
+    { id:2, rowIndex:1, nom:'Développement back-end', debut: addDays(today,-15), fin: addDays(today,5) },
+    { id:3, rowIndex:2, nom:'Intégration API', debut: addDays(today,-5), fin: addDays(today,15) },
+    { id:4, rowIndex:3, nom:'Tests & QA', debut: addDays(today,10), fin: addDays(today,25) },
+    { id:5, rowIndex:4, nom:'Déploiement', debut: addDays(today,22), fin: addDays(today,30) },
+    { id:6, rowIndex:5, nom:'Documentation', debut: addDays(today,-10), fin: addDays(today,20) },
+  ];
+  autoSetViewRange();
+  render();
+}
+
+// ─────────────────────────────────────────────
+//  View range
+// ─────────────────────────────────────────────
+function autoSetViewRange() {
+  const today = startOfDay(new Date());
+  if (tasks.length === 0) {
+    viewStart = addDays(today, -15);
+    viewDays = 60;
+    return;
+  }
+  let minD = tasks[0].debut, maxD = tasks[0].fin;
+  tasks.forEach(t => {
+    if (t.debut < minD) minD = t.debut;
+    if (t.fin > maxD) maxD = t.fin;
+  });
+  const pad = 7;
+  viewStart = addDays(minD, -pad);
+  viewDays = diffDays(viewStart, addDays(maxD, pad)) + 1;
+  if (viewDays < 30) viewDays = 30;
+}
+
+function getViewEnd() { return addDays(viewStart, viewDays); }
+
+// ─────────────────────────────────────────────
+//  Render
+// ─────────────────────────────────────────────
+function render() {
+  updateRangeLabel();
+  renderDateHeader();
+  renderLabels();
+  renderRows();
+  renderBars();
+  renderTodayLine();
+  syncLabelScroll();
+}
+
+function updateRangeLabel() {
+  document.getElementById('range-label').textContent =
+    `${fmtShort(viewStart)} – ${fmtShort(getViewEnd())}`;
+}
+
+function dayX(date) {
+  return diffDays(viewStart, date) * dayWidth;
+}
+
+function xToDate(x) {
+  const days = Math.round(x / dayWidth);
+  return addDays(viewStart, days);
+}
+
+function totalWidth() { return viewDays * dayWidth; }
+
+/* Date header */
+function renderDateHeader() {
+  const monthsRow = document.getElementById('months-row');
+  const daysRow = document.getElementById('days-row');
+  monthsRow.innerHTML = '';
+  daysRow.innerHTML = '';
+
+  // Group days by month
+  const months = [];
+  let cur = null;
+  for (let i = 0; i < viewDays; i++) {
+    const d = addDays(viewStart, i);
+    const key = `${d.getFullYear()}-${d.getMonth()}`;
+    if (!cur || cur.key !== key) {
+      cur = { key, label: MONTH_NAMES[d.getMonth()] + ' ' + d.getFullYear(), count: 0 };
+      months.push(cur);
+    }
+    cur.count++;
+
+    // Day cell
+    const dc = document.createElement('div');
+    dc.className = 'day-cell';
+    dc.style.width = dayWidth + 'px';
+    const dow = d.getDay();
+    if (dow === 0 || dow === 6) dc.classList.add('weekend');
+    const today = startOfDay(new Date());
+    if (diffDays(today, d) === 0) dc.classList.add('today');
+
+    const numEl = document.createElement('div');
+    numEl.className = 'day-num';
+    numEl.textContent = d.getDate();
+    const nameEl = document.createElement('div');
+    nameEl.className = 'day-name';
+    nameEl.textContent = DAY_NAMES[dow];
+    dc.appendChild(numEl);
+    dc.appendChild(nameEl);
+    daysRow.appendChild(dc);
+  }
+
+  months.forEach(m => {
+    const mc = document.createElement('div');
+    mc.className = 'month-cell';
+    mc.style.width = (m.count * dayWidth) + 'px';
+    mc.textContent = m.label;
+    monthsRow.appendChild(mc);
+  });
+
+  document.getElementById('chart-inner').style.minWidth = totalWidth() + 'px';
+}
+
+/* Labels */
+function renderLabels() {
+  const container = document.getElementById('labels-body');
+  container.innerHTML = '';
+  if (tasks.length === 0) {
+    document.getElementById('empty').style.display = 'flex';
+    return;
+  }
+  document.getElementById('empty').style.display = 'none';
+
+  tasks.forEach((t, i) => {
+    const row = document.createElement('div');
+    row.className = 'label-row' + (t.id === selectedId ? ' selected' : '');
+    row.dataset.id = t.id;
+
+    const dot = document.createElement('div');
+    dot.className = 'label-dot';
+    dot.style.background = taskColor(i);
+
+    const info = document.createElement('div');
+    info.style.overflow = 'hidden';
+
+    const name = document.createElement('div');
+    name.className = 'label-text';
+    name.textContent = t.nom;
+
+    const dates = document.createElement('div');
+    dates.className = 'label-dates';
+    dates.textContent = `${fmtShort(t.debut)} → ${fmtShort(t.fin)}`;
+
+    info.appendChild(name);
+    info.appendChild(dates);
+    row.appendChild(dot);
+    row.appendChild(info);
+
+    row.addEventListener('click', () => {
+      selectedId = t.id;
+      selectGristRow(t.id);
+      renderLabels();
+      renderBars();
+    });
+
+    container.appendChild(row);
+  });
+}
+
+/* Grid rows */
+function renderRows() {
+  const container = document.getElementById('rows-container');
+  // Remove old rows (keep empty & today-line)
+  container.querySelectorAll('.grid-row').forEach(el => el.remove());
+  document.getElementById('today-line').remove();
+
+  // Re-insert today-line at end (we'll position after)
+  const todayLine = document.createElement('div');
+  todayLine.id = 'today-line';
+  container.appendChild(todayLine);
+
+  const w = totalWidth();
+  tasks.forEach(t => {
+    const row = document.createElement('div');
+    row.className = 'grid-row' + (t.id === selectedId ? ' selected' : '');
+    row.style.width = w + 'px';
+    row.dataset.id = t.id;
+
+    // Vertical lines
+    for (let i = 0; i < viewDays; i++) {
+      const d = addDays(viewStart, i);
+      const dow = d.getDay();
+      const vl = document.createElement('div');
+      vl.className = 'v-line' + (dow === 0 || dow === 6 ? ' weekend' : '');
+      vl.style.left = (i * dayWidth) + 'px';
+      row.appendChild(vl);
     }
 
-    // Initialisation Grist
-    grist.ready({
-      requiredAccess: 'full', // Nécessaire pour la synchronisation bidirectionnelle
-      columns: [
-        { name: COL_NOM, title: "Nom de la tâche", type: "Text" },
-        { name: COL_DEBUT, title: "Date de début", type: "Date" },
-        { name: COL_FIN, title: "Date de fin", type: "Date" }
-      ]
+    row.addEventListener('click', () => {
+      selectedId = t.id;
+      selectGristRow(t.id);
+      renderLabels();
+      renderBars();
     });
 
-    // Écouter les changements dans la table
-    grist.onRecords((records) => {
-      renderGantt(records);
+    container.insertBefore(row, todayLine);
+  });
+}
+
+/* Bars */
+function renderBars() {
+  document.querySelectorAll('.gantt-bar').forEach(el => el.remove());
+  const container = document.getElementById('rows-container');
+  const gridRows = container.querySelectorAll('.grid-row');
+
+  tasks.forEach((t, i) => {
+    const rowEl = gridRows[i];
+    if (!rowEl) return;
+
+    const x = dayX(t.debut);
+    const w = Math.max(dayWidth * diffDays(t.debut, t.fin), 4);
+
+    const bar = document.createElement('div');
+    bar.className = 'gantt-bar' + (t.id === selectedId ? ' selected' : '');
+    bar.style.left = x + 'px';
+    bar.style.width = w + 'px';
+    bar.style.background = taskColor(i);
+    bar.dataset.id = t.id;
+
+    const lbl = document.createElement('div');
+    lbl.className = 'bar-label';
+    lbl.textContent = t.nom;
+    bar.appendChild(lbl);
+
+    // Drag handles
+    const handleL = document.createElement('div');
+    handleL.className = 'drag-handle left';
+    handleL.title = 'Déplacer début';
+    const handleR = document.createElement('div');
+    handleR.className = 'drag-handle right';
+    handleR.title = 'Déplacer fin';
+    bar.appendChild(handleL);
+    bar.appendChild(handleR);
+
+    // Events
+    bar.addEventListener('mouseenter', e => showTooltip(t, e));
+    bar.addEventListener('mousemove', e => moveTooltip(e));
+    bar.addEventListener('mouseleave', hideTooltip);
+
+    handleL.addEventListener('mousedown', e => startDrag(e, t, 'left'));
+    handleR.addEventListener('mousedown', e => startDrag(e, t, 'right'));
+    bar.addEventListener('mousedown', e => {
+      if (e.target === handleL || e.target === handleR) return;
+      startDrag(e, t, 'move');
     });
 
-    // Note sur la synchronisation Vue -> Table :
-    // Mermaid est principalement un outil de rendu. Pour modifier les dates par "drag & drop",
-    // il faudrait une bibliothèque plus complexe comme vis-timeline ou frappe-gantt.
-    // Ce code assure la lecture synchrone en temps réel.
-  </script>
+    bar.addEventListener('click', e => {
+      if (isDragging) return;
+      selectedId = t.id;
+      selectGristRow(t.id);
+      renderLabels();
+      renderBars();
+    });
+
+    rowEl.appendChild(bar);
+  });
+}
+
+/* Today line */
+function renderTodayLine() {
+  const today = startOfDay(new Date());
+  const tl = document.getElementById('today-line');
+  const x = dayX(today);
+  if (x < 0 || x > totalWidth()) {
+    tl.style.display = 'none';
+    return;
+  }
+  tl.style.display = 'block';
+  tl.style.left = x + 'px';
+  tl.style.top = '0';
+  tl.style.height = (document.getElementById('rows-container').scrollHeight) + 'px';
+}
+
+/* Sync label scroll with chart scroll */
+function syncLabelScroll() {
+  const chartScroll = document.getElementById('chart-scroll');
+  const labelsBody = document.getElementById('labels-body');
+  chartScroll.addEventListener('scroll', () => {
+    labelsBody.scrollTop = chartScroll.scrollTop;
+  });
+  labelsBody.addEventListener('scroll', () => {
+    chartScroll.scrollTop = labelsBody.scrollTop;
+  });
+}
+
+function scrollToTask(t) {
+  const x = dayX(t.debut);
+  const chartScroll = document.getElementById('chart-scroll');
+  const idx = tasks.findIndex(tt => tt.id === t.id);
+  chartScroll.scrollLeft = Math.max(0, x - 80);
+  chartScroll.scrollTop = idx * parseInt(getComputedStyle(document.documentElement).getPropertyValue('--row-h'));
+}
+
+// ─────────────────────────────────────────────
+//  Tooltip
+// ─────────────────────────────────────────────
+function showTooltip(t, e) {
+  const dur = diffDays(t.debut, t.fin);
+  document.getElementById('tt-name').textContent = t.nom;
+  document.getElementById('tt-start').textContent = '▶ ' + fmtDate(t.debut);
+  document.getElementById('tt-end').textContent = '■ ' + fmtDate(t.fin);
+  document.getElementById('tt-dur').textContent = dur + ' jour' + (dur > 1 ? 's' : '');
+  moveTooltip(e);
+  document.getElementById('tooltip').style.display = 'block';
+}
+function moveTooltip(e) {
+  const tt = document.getElementById('tooltip');
+  let x = e.clientX + 14, y = e.clientY - 10;
+  if (x + 230 > window.innerWidth) x = e.clientX - 230;
+  tt.style.left = x + 'px';
+  tt.style.top = y + 'px';
+}
+function hideTooltip() {
+  document.getElementById('tooltip').style.display = 'none';
+}
+
+// ─────────────────────────────────────────────
+//  Drag & Drop
+// ─────────────────────────────────────────────
+function startDrag(e, task, mode) {
+  e.preventDefault();
+  e.stopPropagation();
+  isDragging = false;
+  const startX = e.clientX;
+  const origDebut = new Date(task.debut);
+  const origFin = new Date(task.fin);
+  hideTooltip();
+
+  function onMove(ev) {
+    isDragging = true;
+    const dx = ev.clientX - startX;
+    const ddays = Math.round(dx / dayWidth);
+    if (ddays === 0) return;
+
+    const t = tasks.find(tt => tt.id === task.id);
+    if (mode === 'move') {
+      t.debut = addDays(origDebut, ddays);
+      t.fin = addDays(origFin, ddays);
+    } else if (mode === 'left') {
+      const nd = addDays(origDebut, ddays);
+      if (nd < t.fin) t.debut = nd;
+    } else if (mode === 'right') {
+      const nd = addDays(origFin, ddays);
+      if (nd > t.debut) t.fin = nd;
+    }
+    renderLabels();
+    renderBars();
+  }
+
+  async function onUp() {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    if (isDragging) {
+      // Persist to Grist
+      const t = tasks.find(tt => tt.id === task.id);
+      if (t) await updateGristRow(t.id, t.debut, t.fin);
+    }
+    setTimeout(() => { isDragging = false; }, 50);
+  }
+
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+// ─────────────────────────────────────────────
+//  Navigation & Zoom
+// ─────────────────────────────────────────────
+document.getElementById('btn-prev').addEventListener('click', () => {
+  viewStart = addDays(viewStart, -Math.round(viewDays / 3));
+  render();
+});
+document.getElementById('btn-next').addEventListener('click', () => {
+  viewStart = addDays(viewStart, Math.round(viewDays / 3));
+  render();
+});
+document.getElementById('btn-today').addEventListener('click', () => {
+  autoSetViewRange();
+  render();
+});
+document.getElementById('btn-zoom-in').addEventListener('click', () => {
+  dayWidth = Math.min(dayWidth + 8, 80);
+  render();
+});
+document.getElementById('btn-zoom-out').addEventListener('click', () => {
+  dayWidth = Math.max(dayWidth - 8, 12);
+  render();
+});
+
+// ─────────────────────────────────────────────
+//  Config overlay
+// ─────────────────────────────────────────────
+document.getElementById('btn-config').addEventListener('click', () => {
+  document.getElementById('cfg-nom').value = colConfig.nom;
+  document.getElementById('cfg-debut').value = colConfig.debut;
+  document.getElementById('cfg-fin').value = colConfig.fin;
+  document.getElementById('config-overlay').classList.add('show');
+});
+document.getElementById('cfg-cancel').addEventListener('click', () => {
+  document.getElementById('config-overlay').classList.remove('show');
+});
+document.getElementById('cfg-save').addEventListener('click', () => {
+  colConfig.nom   = document.getElementById('cfg-nom').value.trim() || 'Nom';
+  colConfig.debut = document.getElementById('cfg-debut').value.trim() || 'Debut';
+  colConfig.fin   = document.getElementById('cfg-fin').value.trim() || 'Fin';
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(colConfig));
+  document.getElementById('config-overlay').classList.remove('show');
+  initGrist(); // re-register with new column names
+});
+
+// ─────────────────────────────────────────────
+//  Boot
+// ─────────────────────────────────────────────
+initGrist();
+</script>
 </body>
 </html>
